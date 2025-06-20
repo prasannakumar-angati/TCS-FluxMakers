@@ -1,13 +1,15 @@
 import streamlit as st
-from dotenv import python-dotenv
+from dotenv import load_dotenv
+import os 
 from confluent_kafka import Producer, Consumer
 import json
 import uuid
+load_dotenv("./app.env")
 
 # Kafka secrets will be loaded from Streamlit Secrets
-BOOTSTRAP_SERVERS = st.secrets["KAFKA_BOOTSTRAP"]
-API_KEY = st.secrets["KAFKA_API_KEY"]
-API_SECRET = st.secrets["KAFKA_API_SECRET"]
+BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP")
+API_KEY = os.environ.get("KAFKA_API_KEY")
+API_SECRET = os.environ.get("KAFKA_API_SECRET")
 
 conf_producer = {
     'bootstrap.servers': BOOTSTRAP_SERVERS,
