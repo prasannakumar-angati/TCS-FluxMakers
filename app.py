@@ -1,90 +1,51 @@
 import streamlit as st
+import os 
 from confluent_kafka import Producer, Consumer
 import json
 import uuid
-import time
 
-# =======================
-# Kafka Configuration
-# =======================
-BOOTSTRAP_SERVERS = 'pkc-l7pr2.ap-south-1.aws.confluent.cloud:9092'
-KAFKA_API_KEY = 'ALF2Y6LYWTBA32J6'
-KAFKA_API_SECRET = '/2hB2DViCaK6YaIu/tvOrKiSpfbeUMnkhAAGA3+xl4FwBz9AUyWrt6iiUA8RYnHE'
+# Kafka secrets will be loaded from Streamlit Secrets
+BOOTSTRAP_SERVERS = st.secrets("KAFKA_BOOTSTRAP")
+API_KEY = st.secrets("KAFKA_API_KEY")
+API_SECRET = st.secrets("KAFKA_API_SECRET")
 
-# Kafka Topics
-QUESTION_TOPIC = "user_questions"
-RESPONSE_TOPIC = "llm_answers"
-
-# =======================
-# Kafka Producer
-# =======================
-producer_conf = {
+conf_producer = {
     'bootstrap.servers': BOOTSTRAP_SERVERS,
     'security.protocol': 'SASL_SSL',
-    'sasl.mechanism': 'PLAIN',
-    'sasl.username': KAFKA_API_KEY,
-    'sasl.password': KAFKA_API_SECRET
+    'sasl.mechanisms': 'PLAIN',
+    'sasl.username': API_KEY,
+    'sasl.password': API_SECRET
 }
-producer = Producer(producer_conf)
+producer = Producer(conf_producer)
 
-# =======================
-# Kafka Consumer
-# =======================
-consumer_conf = {
-    'bootstrap.servers': BOOTSTRAP_SERVERS,
-    'security.protocol': 'SASL_SSL',
-    'sasl.mechanism': 'PLAIN',
-    'sasl.username': KAFKA_API_KEY,
-    'sasl.password': KAFKA_API_SECRET,
-    'group.id': 'streamlit-ui-group',
-    'auto.offset.reset': 'latest'
-}
-consumer = Consumer(consumer_conf)
-consumer.subscribe([RESPONSE_TOPIC])
+conf_consumer = conf_producer.copy()
+conf_consumer.update({
+    'group.id': 'streamlit-ui',
+    'auto.offset.reset': 'earliest'
+})
+consumer = Consumer(conf_consumer)
+consumer.subscribe(['llm_answers'])
 
-# =======================
-# Streamlit UI
-# =======================
-st.set_page_config(page_title="🧠 IT Policy Assistant", layout="centered")
-st.title("🧠 Ask Your IT Asset Policy Assistant")
+st.title("💬 Ask a Question About IT Asset Policy")
 
-question = st.text_input("💬 Enter your question:")
+user_question = st.text_input("Ask your question here:")
 
 if st.button("Submit"):
-    if not question.strip():
-        st.warning("Please enter a question.")
-    else:
-        question_id = str(uuid.uuid4())
-        st.info("Sending your question to the assistant...")
+    event_id = str(uuid.uuid4())
+    msg = {"event_id": event_id, "question": user_question}
+    producer.produce("user_questions", key=event_id, value=json.dumps(msg))
+    producer.flush()
+    st.success("✅ Question sent to Kafka")
 
-        # Send question to Kafka
-        message = {
-            "id": question_id,
-            "text": question
-        }
-        producer.produce(QUESTION_TOPIC, key=question_id, value=json.dumps(message))
-        producer.flush()
-        st.write("⏳ Waiting for answer from LLM...")
+    st.info("⏳ Waiting for answer from backend...")
 
-        # Wait for answer from llm_answers topic
-        answer = None
-        timeout = 15  # seconds
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            msg = consumer.poll(1.0)
-            if msg is None:
-                continue
-            if msg.error():
-                st.error(f"Kafka error: {msg.error()}")
-                break
-
-            response = json.loads(msg.value().decode('utf-8'))
-            if response.get("id") == question_id:
-                answer = response.get("answer")
-                break
-
-        if answer:
-            st.success(f"✅ Answer: {answer}")
-        else:
-            st.error("⚠️ No response received in time. Please try again.")
+    while True:
+        msg = consumer.poll(timeout=10.0)
+        if msg is None:
+            st.warning("Still waiting...")
+            continue
+        data = json.loads(msg.value().decode('utf-8'))
+        if data.get("event_id") == event_id:
+            st.subheader("💡 Answer:")
+            st.write(data.get("answer", "No answer returned"))
+            break
