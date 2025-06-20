@@ -1,5 +1,5 @@
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import python-dotenv
 from confluent_kafka import Producer, Consumer
 import json
 import uuid
