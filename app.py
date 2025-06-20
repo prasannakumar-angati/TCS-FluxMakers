@@ -1,65 +1,90 @@
-# app.py
-
 import streamlit as st
-from dotenv import load_dotenv
-import os
 from confluent_kafka import Producer, Consumer
 import json
 import uuid
+import time
 
-# Load secrets from .env file
-load_dotenv("./app.env")
+# =======================
+# Kafka Configuration
+# =======================
+BOOTSTRAP_SERVERS = 'pkc-l7pr2.ap-south-1.aws.confluent.cloud:9092'
+KAFKA_API_KEY = 'ALF2Y6LYWTBA32J6'
+KAFKA_API_SECRET = '/2hB2DViCaK6YaIu/tvOrKiSpfbeUMnkhAAGA3+xl4FwBz9AUyWrt6iiUA8RYnHE'
 
-# Kafka config from environment variables
-BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP")
-API_KEY = os.getenv("KAFKA_API_KEY")
-API_SECRET = os.getenv("KAFKA_API_SECRET")
+# Kafka Topics
+QUESTION_TOPIC = "user_questions"
+RESPONSE_TOPIC = "llm_answers"
 
-# Kafka Producer config
-conf_producer = {
+# =======================
+# Kafka Producer
+# =======================
+producer_conf = {
     'bootstrap.servers': BOOTSTRAP_SERVERS,
     'security.protocol': 'SASL_SSL',
-    'sasl.mechanisms': 'PLAIN',
-    'sasl.username': API_KEY,
-    'sasl.password': API_SECRET
+    'sasl.mechanism': 'PLAIN',
+    'sasl.username': KAFKA_API_KEY,
+    'sasl.password': KAFKA_API_SECRET
 }
-producer = Producer(conf_producer)
+producer = Producer(producer_conf)
 
-# Kafka Consumer config
-conf_consumer = conf_producer.copy()
-conf_consumer.update({
-    'group.id': 'streamlit-ui',
-    'auto.offset.reset': 'earliest'
-})
-consumer = Consumer(conf_consumer)
-consumer.subscribe(['llm_answers'])
+# =======================
+# Kafka Consumer
+# =======================
+consumer_conf = {
+    'bootstrap.servers': BOOTSTRAP_SERVERS,
+    'security.protocol': 'SASL_SSL',
+    'sasl.mechanism': 'PLAIN',
+    'sasl.username': KAFKA_API_KEY,
+    'sasl.password': KAFKA_API_SECRET,
+    'group.id': 'streamlit-ui-group',
+    'auto.offset.reset': 'latest'
+}
+consumer = Consumer(consumer_conf)
+consumer.subscribe([RESPONSE_TOPIC])
 
-# UI
-st.set_page_config(page_title="GenAI IT Assistant", page_icon="🤖")
-st.title("💬 Ask a Question About IT Asset Policy")
+# =======================
+# Streamlit UI
+# =======================
+st.set_page_config(page_title="🧠 IT Policy Assistant", layout="centered")
+st.title("🧠 Ask Your IT Asset Policy Assistant")
 
-user_question = st.text_input("Ask your question here:")
+question = st.text_input("💬 Enter your question:")
 
 if st.button("Submit"):
-    if not user_question.strip():
+    if not question.strip():
         st.warning("Please enter a question.")
     else:
-        event_id = str(uuid.uuid4())
-        msg = {"event_id": event_id, "question": user_question}
-        producer.produce("user_questions", key=event_id, value=json.dumps(msg))
+        question_id = str(uuid.uuid4())
+        st.info("Sending your question to the assistant...")
+
+        # Send question to Kafka
+        message = {
+            "id": question_id,
+            "text": question
+        }
+        producer.produce(QUESTION_TOPIC, key=question_id, value=json.dumps(message))
         producer.flush()
-        st.success("✅ Question sent to Kafka")
+        st.write("⏳ Waiting for answer from LLM...")
 
-        st.info("⏳ Waiting for answer from backend...")
+        # Wait for answer from llm_answers topic
+        answer = None
+        timeout = 15  # seconds
+        start_time = time.time()
 
-        # Poll for response
-        while True:
-            msg = consumer.poll(timeout=10.0)
+        while time.time() - start_time < timeout:
+            msg = consumer.poll(1.0)
             if msg is None:
-                st.warning("Still waiting...")
                 continue
-            data = json.loads(msg.value().decode('utf-8'))
-            if data.get("event_id") == event_id:
-                st.subheader("💡 Answer:")
-                st.write(data.get("answer", "No answer returned"))
+            if msg.error():
+                st.error(f"Kafka error: {msg.error()}")
                 break
+
+            response = json.loads(msg.value().decode('utf-8'))
+            if response.get("id") == question_id:
+                answer = response.get("answer")
+                break
+
+        if answer:
+            st.success(f"✅ Answer: {answer}")
+        else:
+            st.error("⚠️ No response received in time. Please try again.")
